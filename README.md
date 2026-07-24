@@ -20,9 +20,12 @@ This repository contains reusable Linux infrastructure tooling shared by:
 
 ## Philosophy
 
-Small.
-Portable.
-Well documented.
-Fail safely.
-Human-readable.
-Machine-readable.
+Build Once. Manage Everywhere.
+
+Every utility should:
+
+- Be portable
+- Fail safely
+- Produce human-readable output
+- Produce machine-readable output
+- Be reusable across every DHC system
