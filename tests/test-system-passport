@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+TEST_DIR="$(cd -P -- "${BASH_SOURCE[0]%/*}" && pwd)"
+REPO_DIR="$(cd -P -- "${TEST_DIR}/.." && pwd)"
+PASSPORT="${REPO_DIR}/scripts/dhc-system-passport"
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf -- "${TEMP_DIR}"' EXIT
+
+fail() {
+    printf 'FAIL: %s\n' "$*" >&2
+    exit 1
+}
+
+if command -v python3 >/dev/null 2>&1; then
+    validate_json() {
+        python3 -m json.tool "$1" >/dev/null
+    }
+    validate_sections() {
+        python3 - "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    document = json.load(stream)
+
+required = {"identity", "hardware", "gpu", "storage", "network", "docker", "dhc_infra"}
+missing = required.difference(document)
+if missing:
+    raise SystemExit(f"missing top-level sections: {sorted(missing)}")
+PY
+    }
+    validate_repository() {
+        python3 - "$1" "$2" "$3" "$4" "$5" <<'PY'
+import json
+import sys
+
+json_file, expected_path, expected_commit, expected_version, expected_state = sys.argv[1:]
+with open(json_file, encoding="utf-8") as stream:
+    repository = json.load(stream)["dhc_infra"]
+
+expected = {
+    "repository_path": expected_path,
+    "current_commit": expected_commit,
+    "version": expected_version,
+    "working_tree": expected_state,
+}
+if repository != expected:
+    raise SystemExit(f"repository metadata mismatch: {repository!r} != {expected!r}")
+PY
+    }
+else
+    fail "python3 is required to validate JSON in the test suite"
+fi
+
+native_json="${TEMP_DIR}/native.json"
+native_errors="${TEMP_DIR}/native.errors"
+"${PASSPORT}" >"${native_json}" 2>"${native_errors}"
+validate_json "${native_json}" || fail "native output is not valid JSON"
+validate_sections "${native_json}" || fail "native output is missing required sections"
+
+fake_bin="${TEMP_DIR}/fake-bin"
+probe_dir="${TEMP_DIR}/read-only-probe"
+mkdir -p "${fake_bin}" "${probe_dir}"
+ln -s "$(command -v bash)" "${fake_bin}/bash"
+printf 'sentinel\n' > "${probe_dir}/sentinel"
+
+before_state="$(find "${probe_dir}" -printf '%P|%y|%s|%T@\n' | LC_ALL=C sort)"
+minimal_json="${TEMP_DIR}/minimal.json"
+minimal_errors="${TEMP_DIR}/minimal.errors"
+(
+    cd "${probe_dir}"
+    PATH="${fake_bin}" "${PASSPORT}" >"${minimal_json}" 2>"${minimal_errors}"
+)
+after_state="$(find "${probe_dir}" -printf '%P|%y|%s|%T@\n' | LC_ALL=C sort)"
+
+validate_json "${minimal_json}" || fail "output with optional commands missing is not valid JSON"
+validate_sections "${minimal_json}" || fail "minimal output is missing required sections"
+[[ "${before_state}" == "${after_state}" ]] || fail "utility modified its working directory"
+[[ "$(<"${probe_dir}/sentinel")" == "sentinel" ]] || fail "utility modified an existing file"
+
+test_repo="${TEMP_DIR}/configured-repository"
+mkdir -p "${test_repo}"
+git -C "${test_repo}" init -q
+git -C "${test_repo}" config user.name "DHC Infra Test"
+git -C "${test_repo}" config user.email "dhc-infra-test@example.invalid"
+printf 'passport test\n' > "${test_repo}/tracked.txt"
+git -C "${test_repo}" add tracked.txt
+git -C "${test_repo}" commit -q -m "Create passport fixture"
+git -C "${test_repo}" tag passport-test-v1
+test_repo="$(cd -P -- "${test_repo}" && pwd)"
+test_commit="$(git -C "${test_repo}" rev-parse HEAD)"
+
+configured_clean_json="${TEMP_DIR}/configured-clean.json"
+DHC_INFRA_REPO="${test_repo}" "${PASSPORT}" >"${configured_clean_json}" 2>"${TEMP_DIR}/configured-clean.errors"
+validate_json "${configured_clean_json}" || fail "configured repository output is not valid JSON"
+validate_repository "${configured_clean_json}" "${test_repo}" "${test_commit}" \
+    "passport-test-v1" "clean" || fail "configured clean repository was not reported correctly"
+
+printf 'dirty\n' >> "${test_repo}/tracked.txt"
+configured_dirty_json="${TEMP_DIR}/configured-dirty.json"
+DHC_INFRA_REPO="${test_repo}" "${PASSPORT}" >"${configured_dirty_json}" 2>"${TEMP_DIR}/configured-dirty.errors"
+validate_json "${configured_dirty_json}" || fail "dirty repository output is not valid JSON"
+validate_repository "${configured_dirty_json}" "${test_repo}" "${test_commit}" \
+    "passport-test-v1-dirty" "dirty" || fail "configured dirty repository was not reported correctly"
+
+echo "PASS: dhc-system-passport"

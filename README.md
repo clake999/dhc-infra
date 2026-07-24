@@ -8,8 +8,9 @@ Shared Linux infrastructure utilities for the DieHardCards ecosystem.
 and recovering DHC hosts. It centralizes host-level tasks shared by application
 servers, stations, AI/GPU systems, and development workstations.
 
-The repository is currently at **v0.2.0**. The NAS mount utility is the first
-deployed utility; other utility files in the repository are planned placeholders.
+The latest release is **v0.2.0**. The NAS mount utility is deployed, and the
+System Passport utility is implemented for the upcoming v0.3.0 release. Other
+utility files in the repository remain planned placeholders.
 
 ## Design philosophy
 
@@ -70,9 +71,22 @@ files exposed through the CIFS mount. If omitted, the utility uses
 `SUDO_UID`/`SUDO_GID` when run through `sudo`; otherwise, both values default
 to `1000`.
 
+### `dhc-system-passport`
+
+Implemented for v0.3.0. This read-only utility emits a JSON inventory to stdout
+covering identity, hardware, NVIDIA GPUs, storage and NAS state, networking,
+Docker and containerd, and the local `dhc-infra` checkout. It runs without
+`sudo`, tolerates unavailable hardware and optional host commands, and sends
+collection warnings to stderr.
+
+```bash
+scripts/dhc-system-passport > passport.json
+```
+
+See [System Passport](docs/passport.md) for its schema and collection behavior.
+
 ## Planned utilities
 
-- `dhc-system-passport` — create a host System Passport (v0.3.0)
 - Docker / GPU bootstrap tooling (v0.4.0)
 - `dhc-health` — run host and service diagnostics (v0.5.0)
 - Backup and recovery tooling (v0.6.0)
@@ -87,7 +101,7 @@ relied upon.
 | --- | --- | --- |
 | v0.1.0 | Repository scaffold | Complete |
 | v0.2.0 | NAS mount utility | Complete and deployed |
-| v0.3.0 | System Passport | Planned |
+| v0.3.0 | System Passport | In progress |
 | v0.4.0 | Docker / GPU bootstrap | Planned |
 | v0.5.0 | Health and diagnostics | Planned |
 | v0.6.0 | Backup and recovery | Planned |

@@ -1,0 +1,435 @@
+#!/usr/bin/env bash
+
+set -u
+
+export LC_ALL=C
+
+warn() {
+    printf 'WARNING: %s\n' "$*" >&2
+}
+
+has_command() {
+    command -v "$1" >/dev/null 2>&1
+}
+
+json_escape() {
+    local value="${1-}" char code escaped="" index
+
+    for ((index = 0; index < ${#value}; index++)); do
+        char="${value:index:1}"
+        case "${char}" in
+            '"') escaped+='\\"' ;;
+            '\\') escaped+='\\\\' ;;
+            $'\b') escaped+='\\b' ;;
+            $'\f') escaped+='\\f' ;;
+            $'\n') escaped+='\\n' ;;
+            $'\r') escaped+='\\r' ;;
+            $'\t') escaped+='\\t' ;;
+            *)
+                if [[ "${char}" < ' ' ]]; then
+                    printf -v code '%04x' "'${char}"
+                    escaped+="\\u${code}"
+                else
+                    escaped+="${char}"
+                fi
+                ;;
+        esac
+    done
+
+    printf '%s' "${escaped}"
+}
+
+json_string_or_null() {
+    if [[ -n "${1-}" ]]; then
+        printf '"%s"' "$(json_escape "$1")"
+    else
+        printf 'null'
+    fi
+}
+
+json_array() {
+    local separator="" value
+
+    printf '['
+    for value in "$@"; do
+        printf '%s"%s"' "${separator}" "$(json_escape "${value}")"
+        separator=','
+    done
+    printf ']'
+}
+
+read_first_line() {
+    local file="$1" value=""
+
+    if [[ -r "${file}" ]]; then
+        IFS= read -r value < "${file}" || true
+    fi
+    printf '%s' "${value}"
+}
+
+CONFIG_FILE="/etc/dhc-infra.conf"
+DHC_NAS_MOUNT="${DHC_NAS_MOUNT:-/mnt/dhc-nas-01}"
+DHC_INFRA_REPO="${DHC_INFRA_REPO:-}"
+
+if [[ -f "${CONFIG_FILE}" ]]; then
+    if [[ -r "${CONFIG_FILE}" ]]; then
+        # shellcheck source=/dev/null
+        source "${CONFIG_FILE}" || warn "Could not fully load ${CONFIG_FILE}"
+        DHC_NAS_MOUNT="${DHC_NAS_MOUNT:-/mnt/dhc-nas-01}"
+    else
+        warn "Configuration file is not readable: ${CONFIG_FILE}"
+    fi
+fi
+
+identity_timestamp=""
+identity_hostname=""
+identity_os=""
+identity_kernel=""
+identity_architecture=""
+identity_uptime=""
+
+if has_command date; then
+    identity_timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || true)"
+fi
+if [[ -z "${identity_timestamp}" ]]; then
+    warn "Unable to determine the current UTC timestamp"
+fi
+
+if has_command hostname; then
+    identity_hostname="$(hostname 2>/dev/null || true)"
+elif [[ -r /etc/hostname ]]; then
+    identity_hostname="$(read_first_line /etc/hostname)"
+else
+    warn "Unable to determine hostname"
+fi
+
+if [[ -r /etc/os-release ]]; then
+    PRETTY_NAME=""
+    NAME=""
+    VERSION=""
+    # shellcheck source=/etc/os-release
+    source /etc/os-release 2>/dev/null || true
+    identity_os="${PRETTY_NAME:-${NAME:-}${VERSION:+ ${VERSION}}}"
+elif has_command uname; then
+    identity_os="$(uname -s 2>/dev/null || true)"
+fi
+
+if has_command uname; then
+    identity_kernel="$(uname -r 2>/dev/null || true)"
+    identity_architecture="$(uname -m 2>/dev/null || true)"
+else
+    warn "uname is unavailable; kernel and architecture are unknown"
+fi
+
+if has_command uptime; then
+    identity_uptime="$(uptime -p 2>/dev/null || uptime 2>/dev/null || true)"
+elif [[ -r /proc/uptime ]]; then
+    IFS=' ' read -r identity_uptime _ < /proc/uptime || true
+    identity_uptime="${identity_uptime:+${identity_uptime} seconds}"
+fi
+
+hardware_vendor="$(read_first_line /sys/class/dmi/id/sys_vendor)"
+hardware_product="$(read_first_line /sys/class/dmi/id/product_name)"
+hardware_bios="$(read_first_line /sys/class/dmi/id/bios_version)"
+hardware_cpu_model=""
+hardware_logical_cpus=""
+hardware_memory=""
+
+if has_command lscpu; then
+    while IFS=':' read -r key value; do
+        case "${key}" in
+            'Model name')
+                value="${value#${value%%[![:space:]]*}}"
+                hardware_cpu_model="${value}"
+                ;;
+            'CPU(s)')
+                value="${value#${value%%[![:space:]]*}}"
+                [[ -z "${hardware_logical_cpus}" ]] && hardware_logical_cpus="${value}"
+                ;;
+        esac
+    done < <(lscpu 2>/dev/null)
+fi
+
+if [[ -z "${hardware_cpu_model}" && -r /proc/cpuinfo ]]; then
+    while IFS=':' read -r key value; do
+        if [[ "${key}" == *"model name"* ]]; then
+            value="${value#${value%%[![:space:]]*}}"
+            hardware_cpu_model="${value}"
+            break
+        fi
+    done < /proc/cpuinfo
+fi
+
+if [[ -z "${hardware_logical_cpus}" ]]; then
+    if has_command getconf; then
+        hardware_logical_cpus="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+    elif [[ -r /proc/cpuinfo ]]; then
+        while IFS= read -r line; do
+            [[ "${line}" == processor*:* ]] && ((hardware_logical_cpus = ${hardware_logical_cpus:-0} + 1))
+        done < /proc/cpuinfo
+    fi
+fi
+
+if [[ -r /proc/meminfo ]]; then
+    while IFS=':' read -r key value; do
+        if [[ "${key}" == "MemTotal" ]]; then
+            value="${value#${value%%[![:space:]]*}}"
+            hardware_memory="${value}"
+            break
+        fi
+    done < /proc/meminfo
+fi
+
+gpu_models=()
+gpu_memory=()
+gpu_driver=""
+gpu_cuda=""
+
+if has_command nvidia-smi; then
+    gpu_query="$(nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader,nounits 2>/dev/null || true)"
+    if [[ -n "${gpu_query}" ]]; then
+        while IFS=',' read -r model driver memory; do
+            model="${model#${model%%[![:space:]]*}}"
+            driver="${driver#${driver%%[![:space:]]*}}"
+            memory="${memory#${memory%%[![:space:]]*}}"
+            gpu_models+=("${model}")
+            gpu_memory+=("${memory} MiB")
+            [[ -z "${gpu_driver}" ]] && gpu_driver="${driver}"
+        done <<< "${gpu_query}"
+    else
+        warn "nvidia-smi is present but GPU details are unavailable"
+    fi
+
+    nvidia_summary="$(nvidia-smi 2>/dev/null || true)"
+    if [[ "${nvidia_summary}" =~ CUDA[[:space:]]Version:[[:space:]]([0-9.]+) ]]; then
+        gpu_cuda="${BASH_REMATCH[1]}"
+    fi
+fi
+
+root_fs="" root_type="" root_size="" root_used="" root_available="" root_mountpoint=""
+srv_present=false srv_fs="" srv_type="" srv_size="" srv_used="" srv_available="" srv_mountpoint=""
+nas_mounted=false nas_fs="" nas_type="" nas_size="" nas_used="" nas_available="" nas_mountpoint="${DHC_NAS_MOUNT}"
+
+collect_df() {
+    local path="$1" line="" header=true
+
+    has_command df || return 1
+    while IFS= read -r line; do
+        if ${header}; then
+            header=false
+            continue
+        fi
+        [[ -n "${line}" ]] && last_df_line="${line}"
+    done < <(df -P -T "${path}" 2>/dev/null)
+    [[ -n "${last_df_line:-}" ]] || return 1
+    read -r df_fs df_type df_size df_used df_available _ df_mountpoint <<< "${last_df_line}"
+    return 0
+}
+
+last_df_line=""
+if collect_df /; then
+    root_fs="${df_fs}" root_type="${df_type}" root_size="${df_size}"
+    root_used="${df_used}" root_available="${df_available}" root_mountpoint="${df_mountpoint}"
+else
+    warn "Unable to collect filesystem details for /"
+fi
+
+if [[ -d /srv ]]; then
+    srv_present=true
+    last_df_line=""
+    if collect_df /srv; then
+        srv_fs="${df_fs}" srv_type="${df_type}" srv_size="${df_size}"
+        srv_used="${df_used}" srv_available="${df_available}" srv_mountpoint="${df_mountpoint}"
+    else
+        warn "Unable to collect filesystem details for /srv"
+    fi
+fi
+
+if has_command findmnt; then
+    nas_record="$(findmnt -n -P -o SOURCE,FSTYPE,SIZE,USED,AVAIL,TARGET --target "${DHC_NAS_MOUNT}" 2>/dev/null || true)"
+    if [[ -n "${nas_record}" ]]; then
+        findmnt_pattern='([A-Z]+)="([^"]*)"'
+        nas_target=""
+        while [[ "${nas_record}" =~ ${findmnt_pattern} ]]; do
+            key="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]}"
+            nas_record="${nas_record#*${BASH_REMATCH[0]}}"
+            case "${key}" in
+                SOURCE) nas_fs="${value}" ;;
+                FSTYPE) nas_type="${value}" ;;
+                SIZE) nas_size="${value}" ;;
+                USED) nas_used="${value}" ;;
+                AVAIL) nas_available="${value}" ;;
+                TARGET) nas_target="${value}" ;;
+            esac
+        done
+        if [[ "${nas_target}" == "${DHC_NAS_MOUNT}" ]]; then
+            nas_mounted=true
+        else
+            nas_fs="" nas_type="" nas_size="" nas_used="" nas_available=""
+        fi
+    fi
+elif [[ -r /proc/mounts ]]; then
+    while read -r source target type _; do
+        if [[ "${target}" == "${DHC_NAS_MOUNT}" ]]; then
+            nas_mounted=true nas_fs="${source}" nas_type="${type}"
+            break
+        fi
+    done < /proc/mounts
+fi
+
+default_interface="" primary_ipv4="" default_gateway=""
+if has_command ip; then
+    default_route="$(ip -4 route show default 2>/dev/null || true)"
+    if [[ -n "${default_route}" ]]; then
+        read -ra route_parts <<< "${default_route%%$'\n'*}"
+        for ((index = 0; index < ${#route_parts[@]}; index++)); do
+            case "${route_parts[index]}" in
+                dev) default_interface="${route_parts[index + 1]-}" ;;
+                via) default_gateway="${route_parts[index + 1]-}" ;;
+            esac
+        done
+    fi
+
+    if [[ -n "${default_interface}" ]]; then
+        address_output="$(ip -4 -o addr show dev "${default_interface}" scope global 2>/dev/null || true)"
+        if [[ "${address_output}" =~ inet[[:space:]]([0-9.]+)\/ ]]; then
+            primary_ipv4="${BASH_REMATCH[1]}"
+        fi
+    fi
+else
+    warn "ip is unavailable; network details are unknown"
+fi
+
+docker_installed=false docker_version="" docker_root="" docker_runtimes=() docker_default_runtime=""
+docker_enabled="" docker_active=""
+containerd_root="" containerd_enabled="" containerd_active=""
+
+if has_command docker; then
+    docker_installed=true
+    docker_version="$(docker version --format '{{.Client.Version}}' 2>/dev/null || docker --version 2>/dev/null || true)"
+    docker_root="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+    docker_default_runtime="$(docker info --format '{{.DefaultRuntime}}' 2>/dev/null || true)"
+    runtimes_output="$(docker info --format '{{range $name, $_ := .Runtimes}}{{$name}}{{"\n"}}{{end}}' 2>/dev/null || true)"
+    if [[ -n "${runtimes_output}" ]]; then
+        while IFS= read -r runtime; do
+            [[ -n "${runtime}" ]] && docker_runtimes+=("${runtime}")
+        done <<< "${runtimes_output}"
+    elif [[ -z "${docker_root}" ]]; then
+        warn "Docker is installed but daemon details are unavailable"
+    fi
+fi
+
+if has_command systemctl; then
+    docker_enabled="$(systemctl is-enabled docker.service 2>/dev/null || true)"
+    docker_active="$(systemctl is-active docker.service 2>/dev/null || true)"
+    containerd_enabled="$(systemctl is-enabled containerd.service 2>/dev/null || true)"
+    containerd_active="$(systemctl is-active containerd.service 2>/dev/null || true)"
+fi
+
+if has_command containerd; then
+    containerd_config="$(containerd config dump 2>/dev/null || true)"
+    while IFS= read -r line; do
+        if [[ "${line}" == root[[:space:]]*=[[:space:]]* ]]; then
+            containerd_root="${line#*=}"
+            containerd_root="${containerd_root#${containerd_root%%[![:space:]]*}}"
+            containerd_root="${containerd_root#\'}"; containerd_root="${containerd_root%\'}"
+            containerd_root="${containerd_root#\"}"; containerd_root="${containerd_root%\"}"
+            break
+        fi
+    done <<< "${containerd_config}"
+fi
+
+repo_path="" repo_commit="" repo_describe="" repo_state=""
+
+if has_command git; then
+    if [[ -n "${DHC_INFRA_REPO}" ]]; then
+        repo_path="$(GIT_OPTIONAL_LOCKS=0 git -C "${DHC_INFRA_REPO}" rev-parse --show-toplevel 2>/dev/null || true)"
+        if [[ -z "${repo_path}" ]]; then
+            warn "Configured DHC_INFRA_REPO is not a valid Git working tree: ${DHC_INFRA_REPO}"
+        fi
+    fi
+
+    if [[ -z "${repo_path}" ]]; then
+        script_path="${BASH_SOURCE[0]}"
+        script_dir="${script_path%/*}"
+        [[ "${script_dir}" == "${script_path}" ]] && script_dir="."
+        candidate_repo="$(cd -P -- "${script_dir}/.." 2>/dev/null && pwd || true)"
+        if [[ -n "${candidate_repo}" ]]; then
+            repo_path="$(GIT_OPTIONAL_LOCKS=0 git -C "${candidate_repo}" rev-parse --show-toplevel 2>/dev/null || true)"
+        fi
+    fi
+
+    if [[ -z "${repo_path}" ]]; then
+        repo_path="$(GIT_OPTIONAL_LOCKS=0 git rev-parse --show-toplevel 2>/dev/null || true)"
+    fi
+fi
+
+if [[ -n "${repo_path}" ]]; then
+    repo_commit="$(GIT_OPTIONAL_LOCKS=0 git -C "${repo_path}" rev-parse HEAD 2>/dev/null || true)"
+    repo_describe="$(GIT_OPTIONAL_LOCKS=0 git -C "${repo_path}" describe --tags --always --dirty 2>/dev/null || true)"
+    if git_status="$(GIT_OPTIONAL_LOCKS=0 git -C "${repo_path}" status --porcelain 2>/dev/null)"; then
+        if [[ -z "${git_status}" ]]; then repo_state="clean"; else repo_state="dirty"; fi
+    fi
+fi
+
+printf '{\n'
+printf '  "identity": {"timestamp": '; json_string_or_null "${identity_timestamp}"
+printf ', "hostname": '; json_string_or_null "${identity_hostname}"
+printf ', "operating_system": '; json_string_or_null "${identity_os}"
+printf ', "kernel": '; json_string_or_null "${identity_kernel}"
+printf ', "architecture": '; json_string_or_null "${identity_architecture}"
+printf ', "uptime": '; json_string_or_null "${identity_uptime}"; printf '},\n'
+printf '  "hardware": {"system_vendor": '; json_string_or_null "${hardware_vendor}"
+printf ', "product_model": '; json_string_or_null "${hardware_product}"
+printf ', "bios_version": '; json_string_or_null "${hardware_bios}"
+printf ', "cpu_model": '; json_string_or_null "${hardware_cpu_model}"
+printf ', "logical_cpu_count": '; json_string_or_null "${hardware_logical_cpus}"
+printf ', "total_memory": '; json_string_or_null "${hardware_memory}"; printf '},\n'
+printf '  "gpu": {"models": '; json_array "${gpu_models[@]}"
+printf ', "driver_version": '; json_string_or_null "${gpu_driver}"
+printf ', "cuda_version": '; json_string_or_null "${gpu_cuda}"
+printf ', "memory": '; json_array "${gpu_memory[@]}"; printf '},\n'
+printf '  "storage": {\n'
+printf '    "root": {"filesystem": '; json_string_or_null "${root_fs}"
+printf ', "type": '; json_string_or_null "${root_type}"
+printf ', "size": '; json_string_or_null "${root_size}"
+printf ', "used": '; json_string_or_null "${root_used}"
+printf ', "available": '; json_string_or_null "${root_available}"
+printf ', "mountpoint": '; json_string_or_null "${root_mountpoint}"; printf '},\n'
+printf '    "srv": '
+if ${srv_present}; then
+    printf '{"filesystem": '; json_string_or_null "${srv_fs}"
+    printf ', "type": '; json_string_or_null "${srv_type}"
+    printf ', "size": '; json_string_or_null "${srv_size}"
+    printf ', "used": '; json_string_or_null "${srv_used}"
+    printf ', "available": '; json_string_or_null "${srv_available}"
+    printf ', "mountpoint": '; json_string_or_null "${srv_mountpoint}"; printf '}'
+else
+    printf 'null'
+fi
+printf ',\n'
+printf '    "nas": {"mountpoint": '; json_string_or_null "${nas_mountpoint}"
+printf ', "mounted": %s' "${nas_mounted}"
+printf ', "filesystem": '; json_string_or_null "${nas_fs}"
+printf ', "type": '; json_string_or_null "${nas_type}"
+printf ', "size": '; json_string_or_null "${nas_size}"
+printf ', "used": '; json_string_or_null "${nas_used}"
+printf ', "available": '; json_string_or_null "${nas_available}"; printf '}\n  },\n'
+printf '  "network": {"default_interface": '; json_string_or_null "${default_interface}"
+printf ', "primary_ipv4_address": '; json_string_or_null "${primary_ipv4}"
+printf ', "default_gateway": '; json_string_or_null "${default_gateway}"; printf '},\n'
+printf '  "docker": {"installed": %s' "${docker_installed}"
+printf ', "version": '; json_string_or_null "${docker_version}"
+printf ', "root_directory": '; json_string_or_null "${docker_root}"
+printf ', "available_runtimes": '; json_array "${docker_runtimes[@]}"
+printf ', "default_runtime": '; json_string_or_null "${docker_default_runtime}"
+printf ', "service_enabled": '; json_string_or_null "${docker_enabled}"
+printf ', "service_active": '; json_string_or_null "${docker_active}"
+printf ', "containerd_root": '; json_string_or_null "${containerd_root}"
+printf ', "containerd_service_enabled": '; json_string_or_null "${containerd_enabled}"
+printf ', "containerd_service_active": '; json_string_or_null "${containerd_active}"; printf '},\n'
+printf '  "dhc_infra": {"repository_path": '; json_string_or_null "${repo_path}"
+printf ', "current_commit": '; json_string_or_null "${repo_commit}"
+printf ', "version": '; json_string_or_null "${repo_describe}"
+printf ', "working_tree": '; json_string_or_null "${repo_state}"; printf '}\n'
+printf '}\n'
