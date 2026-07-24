@@ -1,0 +1,11 @@
+*.log
+*.tmp
+*.bak
+*.swp
+*.tar.gz
+*.zip
+
+.passports/
+output/
+
+config/dhc-infra.conf
