@@ -14,6 +14,18 @@ All notable released changes to `dhc-infra` are documented here.
 - Added System Passport tests for JSON validity, required sections, missing
   optional commands, and read-only operation.
 
+### Completed
+
+- Completed the v0.3.0 System Passport implementation and its first production
+  deployment on Argus.
+- Completed Argus R-001 validation for persistent NAS access, Docker and
+  containerd, NVIDIA GPU containers, System Passport JSON, and archived-passport
+  integrity across reboot.
+- Archived the official Argus passport with SHA-256
+  `024ef1861797f37b6d6db3d038bafdc50d331323a974cebc426255155d4ea82c`.
+- Documented that `/var/lib/docker` and `/var/lib/containerd` contain only
+  expected small runtime metadata and are intentionally retained.
+
 ## [v0.2.0] - 2026-07-23
 
 ### Added

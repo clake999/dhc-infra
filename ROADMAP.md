@@ -2,10 +2,10 @@
 
 ## Repository vision
 
-`dhc-infra` will be the shared production infrastructure toolkit for the
-DieHardCards ecosystem. It will give DHC application servers, station hosts,
-AI/GPU systems, and development workstations a consistent way to install,
-identify, validate, maintain, and recover their host infrastructure.
+`dhc-infra` is the shared production infrastructure toolkit for the
+DieHardCards ecosystem. It gives DHC application servers, station hosts, AI/GPU
+systems, and development workstations a consistent way to install, identify,
+validate, maintain, and recover their host infrastructure.
 
 The toolkit complements DHC product repositories. It owns portable host
 operations, not application features, station workflows, or website content.
@@ -30,15 +30,40 @@ Work in this repository should favor:
 - AI and GPU servers
 - Linux development and administrative workstations
 
-Specific distribution, package, hardware, or privilege requirements will be
+Specific distribution, package, hardware, or privilege requirements are
 documented per utility as support is implemented.
 
-## Planned milestones
+## Completed milestones
+
+### v0.1.0 — Repository scaffold
+
+Established the repository structure and shared infrastructure-tooling purpose.
+
+### v0.2.0 — NAS mount utility
+
+Delivered and deployed the configurable CIFS mount utility with safe mountpoint
+handling and read/write verification.
 
 ### v0.3.0 — System Passport
 
-Inventory each host's identity, operating system, hardware, storage, network,
-and DHC role, producing a consistent report for operators and future automation.
+Completed the read-only JSON host inventory, resilient optional collectors,
+repository discovery, and automated tests. The first production deployment and
+archival workflow were validated on Argus as part of R-001, including successful
+post-reboot JSON and archive-integrity checks.
+
+## Completed deployment: Argus R-001
+
+Argus R-001 is complete. The host passed reboot validation for persistent NAS
+access, NAS writes, Docker, containerd, the `/srv/docker` data roots, NVIDIA GPU
+container access, System Passport JSON, and archived-passport integrity.
+
+This deployment proves the current NAS and System Passport utilities and the
+Argus Docker/GPU configuration. It does not by itself complete the reusable
+cross-host Docker/GPU bootstrap tooling planned for v0.4.0.
+
+See the [Argus R-001 closeout](docs/argus-r001.md).
+
+## Future milestones
 
 ### v0.4.0 — Docker / GPU bootstrap
 
@@ -60,4 +85,5 @@ restore workflows for supported DHC hosts.
 Integrate proven utilities into a documented, stable toolkit with consistent
 installation, configuration, output, and operational conventions.
 
-Milestone scope may be refined as earlier utilities are deployed and reviewed.
+Future milestone scope may be refined as completed utilities are deployed on
+additional host types.

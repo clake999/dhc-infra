@@ -8,9 +8,9 @@ Shared Linux infrastructure utilities for the DieHardCards ecosystem.
 and recovering DHC hosts. It centralizes host-level tasks shared by application
 servers, stations, AI/GPU systems, and development workstations.
 
-The latest release is **v0.2.0**. The NAS mount utility is deployed, and the
-System Passport utility is implemented for the upcoming v0.3.0 release. Other
-utility files in the repository remain planned placeholders.
+The latest tagged release is **v0.2.0**. The System Passport implementation and
+its first production deployment are complete for v0.3.0. Other utility files in
+the repository remain placeholders for later milestones.
 
 ## Design philosophy
 
@@ -73,11 +73,12 @@ to `1000`.
 
 ### `dhc-system-passport`
 
-Implemented for v0.3.0. This read-only utility emits a JSON inventory to stdout
-covering identity, hardware, NVIDIA GPUs, storage and NAS state, networking,
-Docker and containerd, and the local `dhc-infra` checkout. It runs without
-`sudo`, tolerates unavailable hardware and optional host commands, and sends
-collection warnings to stderr.
+Complete for v0.3.0 and deployed on Argus at
+`/usr/local/bin/dhc-system-passport`. This read-only utility emits a JSON
+inventory to stdout covering identity, hardware, NVIDIA GPUs, storage and NAS
+state, networking, Docker and containerd, and the local `dhc-infra` checkout.
+It runs without `sudo`, tolerates unavailable hardware and optional host
+commands, and sends collection warnings to stderr.
 
 ```bash
 scripts/dhc-system-passport > passport.json
@@ -101,13 +102,28 @@ relied upon.
 | --- | --- | --- |
 | v0.1.0 | Repository scaffold | Complete |
 | v0.2.0 | NAS mount utility | Complete and deployed |
-| v0.3.0 | System Passport | In progress |
+| v0.3.0 | System Passport | Complete |
 | v0.4.0 | Docker / GPU bootstrap | Planned |
 | v0.5.0 | Health and diagnostics | Planned |
 | v0.6.0 | Backup and recovery | Planned |
 | v1.0.0 | Production infrastructure toolkit | Planned |
 
 See [ROADMAP.md](ROADMAP.md) for milestone details.
+
+## Argus R-001
+
+Argus R-001 is complete. The Ubuntu 26.04 LTS GPU host passed pre- and
+post-reboot validation for the persistent CIFS NAS mount and write access,
+Docker and containerd with their `/srv/docker` data roots, NVIDIA RTX 5080
+access from Docker, System Passport JSON generation, and archived-passport
+integrity.
+
+The official passport is
+`/mnt/dhc-nas-01/infrastructure/passports/argus/argus-2026-07-24-113142.json`
+with SHA-256
+`024ef1861797f37b6d6db3d038bafdc50d331323a974cebc426255155d4ea82c`.
+Its pre- and post-reboot hashes matched. See the
+[Argus R-001 closeout](docs/argus-r001.md) for the complete verified record.
 
 ## Relationship to other DHC repositories
 
@@ -123,6 +139,7 @@ machine-management tooling in `dhc-infra`.
 
 ## Documentation
 
+- [Argus R-001 closeout](docs/argus-r001.md)
 - [Architecture](docs/architecture.md)
 - [Configuration](docs/configuration.md)
 - [NAS mounting](docs/nas.md)

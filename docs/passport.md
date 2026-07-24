@@ -1,8 +1,8 @@
 # System Passport
 
-`scripts/dhc-system-passport` is a read-only host inventory utility implemented
-for v0.3.0. It runs without `sudo` and writes one JSON document to stdout.
-Warnings about unavailable optional data go to stderr.
+`scripts/dhc-system-passport` is the completed v0.3.0 read-only host inventory
+utility. It runs without `sudo` and writes one JSON document to stdout. Warnings
+about unavailable optional data go to stderr.
 
 ## Usage
 
@@ -70,3 +70,17 @@ No optional command is a runtime dependency. Git commands run with optional
 locking disabled so repository inspection does not refresh or modify the Git
 index. Docker and systemd queries inspect state but do not start, stop, enable,
 or alter services.
+
+## Argus production validation
+
+The utility is installed on Argus at `/usr/local/bin/dhc-system-passport` with
+`DHC_INFRA_REPO=/home/dhc/dev/dhc-infra`. Its JSON output was validated before
+and after reboot.
+
+The official passport is archived at
+`/mnt/dhc-nas-01/infrastructure/passports/argus/argus-2026-07-24-113142.json`.
+Its SHA-256 is
+`024ef1861797f37b6d6db3d038bafdc50d331323a974cebc426255155d4ea82c`, and the
+pre- and post-reboot hashes matched.
+
+See the [Argus R-001 closeout](argus-r001.md) for the full verified host record.
