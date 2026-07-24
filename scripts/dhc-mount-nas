@@ -43,6 +43,8 @@ load_config() {
     : "${DHC_NAS_CREDENTIALS:?DHC_NAS_CREDENTIALS is not configured}"
 
     DHC_NAS_VERSION="${DHC_NAS_VERSION:-3.1.1}"
+    DHC_NAS_UID="${DHC_NAS_UID:-${SUDO_UID:-1000}}"
+    DHC_NAS_GID="${DHC_NAS_GID:-${SUDO_GID:-1000}}"
 }
 
 validate_credentials() {
@@ -77,7 +79,7 @@ mount_nas() {
     info "Mounting ${source} at ${DHC_NAS_MOUNT}"
 
     mount -t cifs "${source}" "${DHC_NAS_MOUNT}" \
-        -o "credentials=${DHC_NAS_CREDENTIALS},vers=${DHC_NAS_VERSION},uid=${SUDO_UID:-0},gid=${SUDO_GID:-0},iocharset=utf8,noserverino"
+        -o "credentials=${DHC_NAS_CREDENTIALS},vers=${DHC_NAS_VERSION},uid=${DHC_NAS_UID},gid=${DHC_NAS_GID},iocharset=utf8,noserverino"
 
     mountpoint -q "${DHC_NAS_MOUNT}" ||
         fail "Mount command completed, but ${DHC_NAS_MOUNT} is not mounted"
