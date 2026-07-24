@@ -1,0 +1,7 @@
+# DHC Infrastructure configuration
+
+DHC_NAS_HOST=192.168.12.128
+DHC_NAS_SHARE=DHC
+DHC_NAS_MOUNT=/mnt/dhc-nas-01
+DHC_NAS_CREDENTIALS=/etc/dhc-infra/nas-credentials
+DHC_NAS_VERSION=3.1.1

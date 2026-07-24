@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+CONFIG_FILE="${DHC_INFRA_CONFIG:-/etc/dhc-infra.conf}"
+
+info() {
+    printf 'INFO: %s\n' "$*"
+}
+
+success() {
+    printf 'OK: %s\n' "$*"
+}
+
+fail() {
+    printf 'ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+require_root() {
+    if [[ "${EUID}" -ne 0 ]]; then
+        fail "Run this command with sudo."
+    fi
+}
+
+require_command() {
+    local command_name="$1"
+
+    command -v "${command_name}" >/dev/null 2>&1 ||
+        fail "Required command is missing: ${command_name}"
+}
+
+load_config() {
+    [[ -f "${CONFIG_FILE}" ]] ||
+        fail "Configuration file not found: ${CONFIG_FILE}"
+
+    # shellcheck source=/dev/null
+    source "${CONFIG_FILE}"
+
+    : "${DHC_NAS_HOST:?DHC_NAS_HOST is not configured}"
+    : "${DHC_NAS_SHARE:?DHC_NAS_SHARE is not configured}"
+    : "${DHC_NAS_MOUNT:?DHC_NAS_MOUNT is not configured}"
+    : "${DHC_NAS_CREDENTIALS:?DHC_NAS_CREDENTIALS is not configured}"
+
+    DHC_NAS_VERSION="${DHC_NAS_VERSION:-3.1.1}"
+}
+
+validate_credentials() {
+    [[ -f "${DHC_NAS_CREDENTIALS}" ]] ||
+        fail "NAS credentials file not found: ${DHC_NAS_CREDENTIALS}"
+
+    local permissions
+    permissions="$(stat -c '%a' "${DHC_NAS_CREDENTIALS}")"
+
+    if [[ "${permissions}" != "600" ]]; then
+        fail "Credentials file must have permissions 600; currently ${permissions}"
+    fi
+}
+
+mount_nas() {
+    local source="//${DHC_NAS_HOST}/${DHC_NAS_SHARE}"
+
+    mkdir -p "${DHC_NAS_MOUNT}"
+
+    if mountpoint -q "${DHC_NAS_MOUNT}"; then
+        local mounted_source
+        mounted_source="$(findmnt -n -o SOURCE --target "${DHC_NAS_MOUNT}")"
+
+        if [[ "${mounted_source}" == "${source}" ]]; then
+            success "${source} is already mounted at ${DHC_NAS_MOUNT}"
+            return
+        fi
+
+        fail "${DHC_NAS_MOUNT} is already occupied by ${mounted_source}"
+    fi
+
+    info "Mounting ${source} at ${DHC_NAS_MOUNT}"
+
+    mount -t cifs "${source}" "${DHC_NAS_MOUNT}" \
+        -o "credentials=${DHC_NAS_CREDENTIALS},vers=${DHC_NAS_VERSION},uid=${SUDO_UID:-0},gid=${SUDO_GID:-0},iocharset=utf8,noserverino"
+
+    mountpoint -q "${DHC_NAS_MOUNT}" ||
+        fail "Mount command completed, but ${DHC_NAS_MOUNT} is not mounted"
+
+    local mounted_type
+    mounted_type="$(findmnt -n -o FSTYPE --target "${DHC_NAS_MOUNT}")"
+
+    [[ "${mounted_type}" == "cifs" ]] ||
+        fail "Unexpected filesystem type at ${DHC_NAS_MOUNT}: ${mounted_type}"
+
+    success "${source} mounted at ${DHC_NAS_MOUNT}"
+}
+
+verify_access() {
+    local test_file="${DHC_NAS_MOUNT}/.dhc-infra-write-test-$$"
+
+    [[ -r "${DHC_NAS_MOUNT}" ]] ||
+        fail "NAS mount is not readable"
+
+    printf 'dhc-infra mount test\n' > "${test_file}" ||
+        fail "NAS mount is not writable"
+
+    rm -f "${test_file}" ||
+        fail "Could not remove NAS write-test file"
+
+    success "NAS read/write verification passed"
+}
+
+main() {
+    require_root
+
+    require_command mount
+    require_command mountpoint
+    require_command findmnt
+    require_command stat
+
+    load_config
+    validate_credentials
+    mount_nas
+    verify_access
+
+    findmnt "${DHC_NAS_MOUNT}"
+}
+
+main "$@"
